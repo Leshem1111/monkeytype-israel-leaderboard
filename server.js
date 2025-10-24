@@ -1,83 +1,59 @@
+// server.js
 import "dotenv/config";
 import express from "express";
 import session from "express-session";
-import passport from "passport";
-import OAuth2Strategy from "passport-oauth2";
+
+import { randomUUID } from "crypto";
+import fetch from "node-fetch"; // if Node >= 18 you can delete this line and use the global fetch
+
 import { upsertUser, loadUsers, saveUsers } from "./lib/store.js";
 import { isIsraelIP } from "./lib/ip.js";
 import { fetchMonkeytype15s } from "./lib/monkeytype.js";
-import { randomUUID } from "crypto";
-import { upsertKey, getApeKey } from "./lib/keystore.js";
+import { upsertKey } from "./lib/keystore.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const OAUTH = {
-  authURL: process.env.MONKEYTYPE_OAUTH_AUTHORIZE_URL || "",
-  tokenURL: process.env.MONKEYTYPE_OAUTH_TOKEN_URL || "",
-  clientID: process.env.MONKEYTYPE_OAUTH_CLIENT_ID || "demo-client",
-  clientSecret: process.env.MONKEYTYPE_OAUTH_CLIENT_SECRET || "demo-secret",
-  callbackURL: process.env.MONKEYTYPE_OAUTH_CALLBACK_URL || `http://localhost:${PORT}/auth/monkeytype/callback`
-};
-
-const DEMO_MODE = !(OAUTH.authURL && OAUTH.tokenURL && process.env.MONKEYTYPE_OAUTH_CLIENT_ID && process.env.MONKEYTYPE_OAUTH_CLIENT_SECRET);
-
-// Sessions
-app.use(session({
-  secret: process.env.SESSION_SECRET || "dev-secret",
-  resave: false,
-  saveUninitialized: false
-}));
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "dev-secret",
+    resave: false,
+    saveUninitialized: false,
+  })
+);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public"));
 
-// Passport setup (Strategy)
-if (!DEMO_MODE) {
-  passport.use("monkeytype", new OAuth2Strategy({
-    authorizationURL: OAUTH.authURL,
-    tokenURL: OAUTH.tokenURL,
-    clientID: OAUTH.clientID,
-    clientSecret: OAUTH.clientSecret,
-    callbackURL: OAUTH.callbackURL
-  }, async (accessToken, refreshToken, params, profile, done) => {
-    // With a real provider, fetch profile here to get username.
-    // For now, assume username might be in params or needs another API call.
-    // Replace this with the correct call once available.
-    try {
-      const username = params?.username || `user_${randomUUID().slice(0,8)}`;
-      return done(null, { username, accessToken });
-    } catch (e) {
-      return done(e);
-    }
-  }));
-} else {
-  // Mock strategy in Demo Mode — lets the user supply a username after "login"
-  passport.use("monkeytype", new (class DemoStrategy{
-    name = "monkeytype";
-    authenticate(req) {
-      // Simulate redirect to provider
-      const state = randomUUID();
-      this.success({ state, demo: true }); // immediately "logged in"
-    }
-  })());
+// -------------------- Helpers --------------------
+const MT_BASE = process.env.MONKEYTYPE_API_BASE || "https://api.monkeytype.com";
+
+// quick probe to validate an ApeKey
+async function testApeKey(apeKey) {
+  const r = await fetch(`${MT_BASE}/results/last`, {
+    headers: { Authorization: `ApeKey ${apeKey}` },
+  });
+  return r.ok;
 }
 
-passport.serializeUser((user, done) => done(null, user));
-passport.deserializeUser((obj, done) => done(null, obj));
+// refresh one (siteUsername is the display name you store)
+async function refreshOne(siteUsername, apeKey = null) {
+  const mt = await fetchMonkeytype15s(siteUsername, apeKey); // your lib reads stored key if apeKey is null
+  const now = new Date().toISOString();
+  await upsertUser({
+    username: siteUsername,        // display name on your leaderboard
+    wpm15: mt.wpm15,
+    accuracy: mt.accuracy,
+    timestamp: now,
+    country: "IL",
+  });
+}
 
-app.use(passport.initialize());
-app.use(passport.session());
+// -------------------- Routes --------------------
 
-// --- Routes ---
-
-// Start OAuth
-app.get("/auth/monkeytype", passport.authenticate("monkeytype"));
-
-// OAuth callback
-app.get("/auth/monkeytype/callback", passport.authenticate("monkeytype", { failureRedirect: "/" }), async (req, res) => {
-  // Israel-only gate at login
+// Simple join page: "Username" (for site) + "Ape Key"
+app.get("/join", async (req, res) => {
   const allowed = await isIsraelIP(req);
   if (!allowed) {
     return res.status(403).send(`
@@ -89,94 +65,87 @@ app.get("/auth/monkeytype/callback", passport.authenticate("monkeytype", { failu
     `);
   }
 
-  // In Demo Mode, ask for Monkeytype username once
-  if (DEMO_MODE) {
-    return res.send(`
-  <html><body style="font-family: ui-sans-serif; padding:24px">
-    <h2>Link your Monkeytype account</h2>
-    <p>Paste your <b>ApeKey</b> from Monkeytype (Account → Ape Keys). We use it to read your latest 15s result.</p>
-    <form method="POST" action="/auth/demo/link">
-      <label>Monkeytype Username</label><br/>
-      <input name="username" required placeholder="e.g. shira_types" style="padding:8px; width:260px; margin:8px 0"/><br/>
-      <label>ApeKey</label><br/>
-      <input name="apeKey" required placeholder="ape_xxx..." style="padding:8px; width:420px; margin:8px 0"/><br/>
-      <button type="submit" style="padding:8px 12px; font-weight:600">Continue</button>
+  res.send(`
+  <html><body style="font-family: ui-sans-serif; padding:24px; max-width:700px">
+    <h2>Join the Leaderboard</h2>
+    <p>Enter a <b>Username for this site</b> (what we’ll show on the board) and paste your <b>Ape Key</b> from Monkeytype (Account → Ape Keys).</p>
+    <form method="POST" action="/join" style="margin-top:16px">
+      <label style="display:block; font-weight:600">Username (site display name)</label>
+      <input name="siteUsername" required placeholder="e.g. shira_types" style="padding:8px; width:360px; margin:6px 0"/>
+
+      <label style="display:block; font-weight:600; margin-top:8px">Ape Key</label>
+      <input name="apeKey" required placeholder="ape_xxx..." style="padding:8px; width:480px; margin:6px 0"/>
+
+      <div style="margin-top:12px">
+        <button type="submit" style="padding:8px 12px; font-weight:600">Join</button>
+        <a href="/" style="margin-left:12px">Cancel</a>
+      </div>
     </form>
   </body></html>
-`);
-
-  }
-
-  // If real OAuth gives us a username already, proceed to store/fetch
-  try {
-    const username = req.user?.username;
-    if (!username) {
-      return res.status(400).send("Could not resolve Monkeytype username from OAuth.");
-    }
-    await refreshOne(username, req.user?.accessToken);
-    return res.redirect("/");
-  } catch (e) {
-    console.error(e);
-    return res.status(500).send("Error while fetching your 15s result.");
-  }
+  `);
 });
 
-// Demo: link username
-app.post("/auth/demo/link", async (req, res) => {
+// Handle the join form submit
+app.post("/join", async (req, res) => {
   const allowed = await isIsraelIP(req);
   if (!allowed) return res.status(403).send("Israel-only access.");
 
-  const chunks = [];
-  req.on("data", c => chunks.push(c));
-  req.on("end", async () => {
-    const params = new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
-    const username = (params.get("username") || "").trim();
-    const apeKey = (params.get("apeKey") || "").trim();
-    if (!username || !apeKey) return res.status(400).send("Username and ApeKey required.");
+  try {
+    const siteUsername = (req.body?.siteUsername || "").trim();
+    const apeKey = (req.body?.apeKey || "").trim();
 
-    try {
-      const ok = await testApeKey(apeKey);
-      if (!ok) return res.status(400).send("ApeKey invalid or not authorized.");
-    } catch {
-      return res.status(502).send("Could not verify ApeKey with Monkeytype.");
+    if (!siteUsername || !apeKey) {
+      return res.status(400).send("Both Username and Ape Key are required.");
     }
 
-    await upsertKey({ username, apeKey });
-    await refreshOne(username); // this now uses the saved key
-    res.redirect("/");
-  });
+    const ok = await testApeKey(apeKey);
+    if (!ok) return res.status(400).send("Ape Key invalid or not authorized.");
+
+    // store the key under the *site username*
+    await upsertKey({ username: siteUsername, apeKey });
+
+    // fetch their 15s PB and upsert using the *site username* as display
+    await refreshOne(siteUsername, apeKey);
+
+    return res.redirect("/");
+  } catch (e) {
+    console.error("join error:", e?.message || e);
+    return res.status(500).send("Server error while joining.");
+  }
 });
 
-// Helper to validate ApeKey
-async function testApeKey(apeKey) {
-  const r = await fetch(`${process.env.MONKEYTYPE_API_BASE || "https://api.monkeytype.com"}/results/last`, {
-    headers: { Authorization: `ApeKey ${apeKey}` }
-  });
-  return r.ok;
-}
+// Optional JSON API (if you want to POST from client instead of using the HTML form)
+app.post("/api/join", async (req, res) => {
+  const allowed = await isIsraelIP(req);
+  if (!allowed) return res.status(403).json({ ok: false, error: "Israel-only access." });
 
+  try {
+    const siteUsername = (req.body?.siteUsername || "").trim();
+    const apeKey = (req.body?.apeKey || "").trim();
 
-// Refresh stats for one user and upsert in DB
-async function refreshOne(username, accessToken) {
-  const mt = await fetchMonkeytype15s(username);
-  const now = new Date().toISOString();
-  await upsertUser({
-    username: mt.username,
-    wpm15: mt.wpm15,
-    accuracy: mt.accuracy,
-    timestamp: now,
-    country: "IL" // We already filtered by IP on login.
-  });
-}
+    if (!siteUsername || !apeKey) {
+      return res.status(400).json({ ok: false, error: "Username and Ape Key required." });
+    }
 
-// API: leaderboard
+    const ok = await testApeKey(apeKey);
+    if (!ok) return res.status(400).json({ ok: false, error: "Ape Key invalid or not authorized." });
+
+    await upsertKey({ username: siteUsername, apeKey });
+    await refreshOne(siteUsername, apeKey);
+
+    return res.json({ ok: true, username: siteUsername });
+  } catch (e) {
+    console.error("api/join error:", e?.message || e);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
+// Leaderboard JSON (kept same sorting)
 app.get("/api/leaderboard", async (req, res) => {
   const users = await loadUsers();
 
-  // Only IL users (defensive)
-  const ilUsers = users.filter(u => (u.country || "IL") === "IL");
+  const ilUsers = users.filter((u) => (u.country || "IL") === "IL");
 
-  // Sort by WPM desc, tie-breaker accuracy, then recency
   ilUsers.sort((a, b) => {
     if (b.wpm15 !== a.wpm15) return b.wpm15 - a.wpm15;
     if (b.accuracy !== a.accuracy) return b.accuracy - a.accuracy;
@@ -184,28 +153,25 @@ app.get("/api/leaderboard", async (req, res) => {
   });
 
   res.json({
-    mode: DEMO_MODE ? "demo" : "live",
-    users: ilUsers.map(u => ({
-      username: u.username,
+    users: ilUsers.map((u) => ({
+      username: u.username, // this is the *site* username
       wpm15: u.wpm15,
       accuracy: u.accuracy,
-      timestamp: u.timestamp
-    }))
+      timestamp: u.timestamp,
+    })),
   });
 });
 
 // Health
-app.get("/healthz", (_, res) => res.json({ ok: true, demo: DEMO_MODE }));
+app.get("/healthz", (_, res) => res.json({ ok: true }));
 
-// Static homepage is served from /public
-
-// --- Background refresh: pull latest stats every N minutes ---
-const REFRESH_MINUTES = 3; // “every few minutes”
+// -------------------- background refresh --------------------
+const REFRESH_MINUTES = 3;
 setInterval(async () => {
   try {
     const users = await loadUsers();
-    // refresh each user in-place (best-effort)
     for (const u of users) {
+      // fetcher will use the stored Ape Key via keystore
       const mt = await fetchMonkeytype15s(u.username);
       u.wpm15 = mt.wpm15;
       u.accuracy = mt.accuracy;
@@ -218,7 +184,7 @@ setInterval(async () => {
   }
 }, REFRESH_MINUTES * 60 * 1000);
 
-// Start server
+// -------------------- start server --------------------
 app.listen(PORT, () => {
-  console.log(`Monkeytype Israel Leaderboard running on http://localhost:${PORT}  (mode: ${DEMO_MODE ? "DEMO" : "LIVE"})`);
+  console.log(`Monkeytype Israel Leaderboard running on http://localhost:${PORT}`);
 });
