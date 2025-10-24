@@ -1,0 +1,64 @@
+:root{
+  --bg:#f6f9ff;
+  --card:#ffffff;
+  --ink:#0f172a;
+  --muted:#64748b;
+  --primary:#1e40af; /* deep blue */
+  --primary-600:#1d4ed8;
+  --primary-100:#dbeafe;
+  --ring: rgba(30,64,175,0.25);
+  --border:#e2e8f0;
+}
+
+* { box-sizing: border-box; }
+html, body { margin:0; padding:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"; color:var(--ink); background:var(--bg); }
+
+.header{
+  display:flex; justify-content:space-between; align-items:center;
+  padding:16px 20px; position:sticky; top:0; backdrop-filter: blur(6px);
+  background: linear-gradient(to bottom, rgba(255,255,255,.85), rgba(255,255,255,.55));
+  border-bottom:1px solid var(--border);
+}
+.brand{ display:flex; gap:12px; align-items:center; }
+.brand .flag{ font-size:1.5rem; }
+h1{ font-size:1.25rem; margin:0; }
+.nav{ display:flex; gap:10px; align-items:center; }
+
+.container{ max-width:1100px; margin:24px auto; padding: 0 16px; }
+.card{
+  background:var(--card); border:1px solid var(--border); border-radius:14px;
+  padding:18px; box-shadow: 0 10px 30px rgba(2,6,23,0.04);
+}
+.card + .card { margin-top:16px; }
+h2{ margin:0 0 8px 0; font-size:1.15rem; }
+h3{ margin:0 0 8px 0; font-size:1rem; }
+.muted{ color:var(--muted); }
+
+.table-wrap{ overflow:auto; border-radius:10px; border:1px solid var(--border); }
+table{ width:100%; border-collapse:collapse; background:white; }
+thead th{
+  text-align:left; font-weight:600; font-size:.9rem; color:#0f172a;
+  background:var(--primary-100); border-bottom:1px solid var(--border); padding:12px;
+}
+tbody td{
+  padding:12px; border-bottom:1px solid #eef2f7; font-size:.95rem;
+}
+tbody tr:hover{ background:#f8fbff; }
+td:nth-child(1){ width:80px; font-variant:tabular-nums; }
+td:nth-child(3), td:nth-child(4){ font-variant: tabular-nums; }
+
+.btn{
+  appearance:none; border:1px solid var(--primary);
+  background: white; color:var(--primary); padding:10px 14px; border-radius:10px;
+  font-weight:600; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; gap:6px;
+}
+.btn.primary{
+  background:var(--primary); color:white; border-color:var(--primary);
+}
+.btn:hover{ box-shadow: 0 0 0 4px var(--ring); }
+.btn.ghost{
+  background:transparent; border-color:#cbd5e1; color:#0f172a;
+}
+
+.footer{ text-align:center; padding:24px; color:var(--muted); }
+code{ background:#f1f5f9; padding:2px 6px; border-radius:6px; }
