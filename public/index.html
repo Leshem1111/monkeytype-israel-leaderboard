@@ -13,7 +13,8 @@
       <h1>Monkeytype Israel Leaderboard</h1>
     </div>
     <nav class="nav">
-      <a class="btn primary" href="/auth/monkeytype">Sign in with Monkeytype</a>
+      <!-- Go to the server-side form that asks for Username + Ape Key -->
+      <a class="btn primary" href="/join">Login to Monkeytype</a>
       <button id="refreshBtn" class="btn ghost" aria-label="Refresh leaderboard">↻ Refresh</button>
     </nav>
   </header>
@@ -43,7 +44,7 @@
 
     <section class="card" id="demoHint" hidden>
       <h3>Demo Mode</h3>
-      <p>This instance uses a mock OAuth and simulated Monkeytype stats. Plug in real OAuth/API in <code>.env</code> and <code>lib/monkeytype.js</code> to go live.</p>
+      <p>This instance uses a mock OAuth and simulated Monkeytype stats. Plug in real API keys to go live.</p>
     </section>
   </main>
 

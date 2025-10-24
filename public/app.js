@@ -1,36 +1,66 @@
-const body = document.getElementById("lb-body");
-const refreshBtn = document.getElementById("refreshBtn");
-const demoHint = document.getElementById("demoHint");
+(async function () {
+  const tbody = document.getElementById("lb-body");
+  const refreshBtn = document.getElementById("refreshBtn");
 
-async function getLeaderboard() {
-  const r = await fetch("/api/leaderboard");
-  const data = await r.json();
-  if (data.mode === "demo") demoHint.hidden = false;
+  function fmtTime(iso) {
+    try {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return "—";
+      return d.toLocaleString();
+    } catch {
+      return "—";
+    }
+  }
 
-  const rows = (data.users || []).map((u, i) => {
-    const date = new Date(u.timestamp);
-    return `
-      <tr>
-        <td>${i + 1}</td>
-        <td>${escapeHtml(u.username)}</td>
-        <td>${Number(u.wpm15).toFixed(0)}</td>
-        <td>${Number(u.accuracy).toFixed(2)}%</td>
-        <td title="${date.toISOString()}">${date.toLocaleString()}</td>
-      </tr>
-    `;
-  }).join("");
+  function render(rows) {
+    if (!rows || rows.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" class="muted">No entries yet — click “Login to Monkeytype” to join.</td></tr>`;
+      return;
+    }
 
-  body.innerHTML = rows || `<tr><td colspan="5" class="muted">No users yet. Be the first to sign in!</td></tr>`;
-}
+    tbody.innerHTML = rows
+      .map((u, i) => {
+        const wpm = (u.wpm15 ?? 0).toString();
+        const acc = (u.accuracy ?? 0).toFixed(2) + "%";
+        const ts = fmtTime(u.timestamp);
+        return `
+          <tr>
+            <td>${i + 1}</td>
+            <td>${escapeHtml(u.username)}</td>
+            <td>${wpm}</td>
+            <td>${acc}</td>
+            <td class="muted">${ts}</td>
+          </tr>
+        `;
+      })
+      .join("");
+  }
 
-function escapeHtml(s){
-  return s?.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])) ?? "";
-}
+  async function load() {
+    try {
+      const r = await fetch("/api/leaderboard", { headers: { "Cache-Control": "no-cache" } });
+      const j = await r.json();
+      render(j.users || []);
+      // Show/hide demo hint if server included mode
+      const demo = document.getElementById("demoHint");
+      if (j.mode === "demo") demo.hidden = false; else demo.hidden = true;
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="5" class="muted">Failed to load leaderboard.</td></tr>`;
+      console.error(e);
+    }
+  }
 
-refreshBtn?.addEventListener("click", () => getLeaderboard());
+  refreshBtn?.addEventListener("click", load);
 
-// Initial load
-getLeaderboard();
+  // basic HTML escaping for usernames
+  function escapeHtml(s) {
+    return String(s)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  }
 
-// Auto refresh every 2 minutes (adjust if you’d like)
-setInterval(getLeaderboard, 2 * 60 * 1000);
+  await load();
+})();
