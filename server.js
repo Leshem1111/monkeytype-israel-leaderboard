@@ -7,6 +7,7 @@ import { upsertUser, loadUsers, saveUsers } from "./lib/store.js";
 import { isIsraelIP } from "./lib/ip.js";
 import { fetchMonkeytype15s } from "./lib/monkeytype.js";
 import { randomUUID } from "crypto";
+import { upsertKey, getApeKey } from "./lib/keystore.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -91,15 +92,19 @@ app.get("/auth/monkeytype/callback", passport.authenticate("monkeytype", { failu
   // In Demo Mode, ask for Monkeytype username once
   if (DEMO_MODE) {
     return res.send(`
-      <html><body style="font-family: ui-sans-serif; padding:24px">
-        <h2>Link your Monkeytype username</h2>
-        <form method="POST" action="/auth/demo/link">
-          <label>Monkeytype Username</label><br/>
-          <input name="username" required placeholder="e.g. shira_types" style="padding:8px; width:260px; margin:8px 0"/><br/>
-          <button type="submit" style="padding:8px 12px; font-weight:600">Continue</button>
-        </form>
-      </body></html>
-    `);
+  <html><body style="font-family: ui-sans-serif; padding:24px">
+    <h2>Link your Monkeytype account</h2>
+    <p>Paste your <b>ApeKey</b> from Monkeytype (Account → Ape Keys). We use it to read your latest 15s result.</p>
+    <form method="POST" action="/auth/demo/link">
+      <label>Monkeytype Username</label><br/>
+      <input name="username" required placeholder="e.g. shira_types" style="padding:8px; width:260px; margin:8px 0"/><br/>
+      <label>ApeKey</label><br/>
+      <input name="apeKey" required placeholder="ape_xxx..." style="padding:8px; width:420px; margin:8px 0"/><br/>
+      <button type="submit" style="padding:8px 12px; font-weight:600">Continue</button>
+    </form>
+  </body></html>
+`);
+
   }
 
   // If real OAuth gives us a username already, proceed to store/fetch
@@ -119,25 +124,41 @@ app.get("/auth/monkeytype/callback", passport.authenticate("monkeytype", { failu
 // Demo: link username
 app.post("/auth/demo/link", async (req, res) => {
   const allowed = await isIsraelIP(req);
-  if (!allowed) {
-    return res.status(403).send("Israel-only access.");
-  }
+  if (!allowed) return res.status(403).send("Israel-only access.");
+
   const chunks = [];
   req.on("data", c => chunks.push(c));
   req.on("end", async () => {
-    const body = Buffer.concat(chunks).toString("utf8");
-    const match = /username=([^&]+)/.exec(body);
-    const username = match ? decodeURIComponent(match[1]).trim() : "";
-    if (!username) return res.status(400).send("Username required.");
+    const params = new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
+    const username = (params.get("username") || "").trim();
+    const apeKey = (params.get("apeKey") || "").trim();
+    if (!username || !apeKey) return res.status(400).send("Username and ApeKey required.");
 
-    await refreshOne(username, null);
+    try {
+      const ok = await testApeKey(apeKey);
+      if (!ok) return res.status(400).send("ApeKey invalid or not authorized.");
+    } catch {
+      return res.status(502).send("Could not verify ApeKey with Monkeytype.");
+    }
+
+    await upsertKey({ username, apeKey });
+    await refreshOne(username); // this now uses the saved key
     res.redirect("/");
   });
 });
 
+// Helper to validate ApeKey
+async function testApeKey(apeKey) {
+  const r = await fetch(`${process.env.MONKEYTYPE_API_BASE || "https://api.monkeytype.com"}/results/last`, {
+    headers: { Authorization: `ApeKey ${apeKey}` }
+  });
+  return r.ok;
+}
+
+
 // Refresh stats for one user and upsert in DB
 async function refreshOne(username, accessToken) {
-  const mt = await fetchMonkeytype15s(username, accessToken);
+  const mt = await fetchMonkeytype15s(username);
   const now = new Date().toISOString();
   await upsertUser({
     username: mt.username,
@@ -185,7 +206,7 @@ setInterval(async () => {
     const users = await loadUsers();
     // refresh each user in-place (best-effort)
     for (const u of users) {
-      const mt = await fetchMonkeytype15s(u.username, null);
+      const mt = await fetchMonkeytype15s(u.username);
       u.wpm15 = mt.wpm15;
       u.accuracy = mt.accuracy;
       u.timestamp = new Date().toISOString();
