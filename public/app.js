@@ -1,6 +1,39 @@
 (async function () {
   const tbody = document.getElementById("lb-body");
   const refreshBtn = document.getElementById("refreshBtn");
+  const loginBtn = document.getElementById("loginBtn");
+  const logoutForm = document.getElementById("logoutForm");
+
+  // --- session -> toggle login button text ---
+  async function updateLoginButton() {
+    try {
+      const r = await fetch("/api/session", { credentials: "same-origin" });
+      const j = await r.json();
+
+      if (j.loggedIn) {
+        if (loginBtn) {
+          loginBtn.textContent = "Logged in";
+          loginBtn.href = "#";
+          loginBtn.setAttribute("aria-pressed", "true");
+          loginBtn.classList.add("is-logged-in");
+          // prevent navigating when already logged in
+          loginBtn.addEventListener("click", (e) => e.preventDefault());
+        }
+        if (logoutForm) logoutForm.style.display = "";
+      } else {
+        if (loginBtn) {
+          loginBtn.textContent = "Login to Monkeytype";
+          loginBtn.href = "/join";
+          loginBtn.removeAttribute("aria-pressed");
+          loginBtn.classList.remove("is-logged-in");
+        }
+        if (logoutForm) logoutForm.style.display = "none";
+      }
+    } catch (e) {
+      // best-effort; keep default UI
+      console.warn("session check failed", e);
+    }
+  }
 
   function fmtTime(iso) {
     try {
@@ -10,6 +43,15 @@
     } catch {
       return "—";
     }
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
   }
 
   function render(rows) {
@@ -41,7 +83,6 @@
       const r = await fetch("/api/leaderboard", { headers: { "Cache-Control": "no-cache" } });
       const j = await r.json();
       render(j.users || []);
-      // Show/hide demo hint if server included mode
       const demo = document.getElementById("demoHint");
       if (j.mode === "demo") demo.hidden = false; else demo.hidden = true;
     } catch (e) {
@@ -52,15 +93,5 @@
 
   refreshBtn?.addEventListener("click", load);
 
-  // basic HTML escaping for usernames
-  function escapeHtml(s) {
-    return String(s)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#39;");
-  }
-
-  await load();
+  await Promise.all([updateLoginButton(), load()]);
 })();
