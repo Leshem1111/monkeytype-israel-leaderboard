@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Monkeytype Israel Leaderboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="header">
+    <div class="brand">
+      <span class="flag">🇮🇱</span>
+      <h1>Monkeytype Israel Leaderboard</h1>
+    </div>
+    <nav class="nav">
+      <a class="btn primary" href="/auth/monkeytype">Sign in with Monkeytype</a>
+      <button id="refreshBtn" class="btn ghost" aria-label="Refresh leaderboard">↻ Refresh</button>
+    </nav>
+  </header>
+
+  <main class="container">
+    <section class="card">
+      <h2>Live Leaderboard (15s)</h2>
+      <p class="muted">Only users detected in Israel are shown. Updates automatically.</p>
+
+      <div class="table-wrap">
+        <table id="leaderboard">
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Username</th>
+              <th>WPM (15s)</th>
+              <th>Accuracy</th>
+              <th>Last updated</th>
+            </tr>
+          </thead>
+          <tbody id="lb-body">
+            <tr><td colspan="5" class="muted">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card" id="demoHint" hidden>
+      <h3>Demo Mode</h3>
+      <p>This instance uses a mock OAuth and simulated Monkeytype stats. Plug in real OAuth/API in <code>.env</code> and <code>lib/monkeytype.js</code> to go live.</p>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <small>Made for the 🇮🇱 typing community • Auto-refreshes every few minutes</small>
+  </footer>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
