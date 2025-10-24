@@ -13,9 +13,20 @@
       <h1>Monkeytype Israel Leaderboard</h1>
     </div>
     <nav class="nav">
-      <!-- Go to the server-side form that asks for Username + Ape Key -->
-      <a class="btn primary" href="/join">Login to Monkeytype</a>
+      <!-- Login button toggles to "Logged in" once session exists -->
+      <a id="loginBtn" class="btn primary" href="/join">Login to Monkeytype</a>
+
+      <!-- Discord support -->
+      <a id="discordBtn" class="btn ghost" href="https://discord.gg/uJe4G6DFEJ" target="_blank" rel="noopener noreferrer">
+        Discord for Support
+      </a>
+
       <button id="refreshBtn" class="btn ghost" aria-label="Refresh leaderboard">↻ Refresh</button>
+
+      <!-- Optional logout (hidden until logged in) -->
+      <form id="logoutForm" action="/logout" method="POST" style="display:none; margin-left:8px">
+        <button class="btn danger" type="submit">Logout</button>
+      </form>
     </nav>
   </header>
 

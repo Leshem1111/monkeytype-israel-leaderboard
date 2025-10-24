@@ -3,18 +3,16 @@ import "dotenv/config";
 import express from "express";
 import session from "express-session";
 
-import { randomUUID } from "crypto";
-//import fetch from "node-fetch"; // if Node >= 18 you can delete this line and use the global fetch
-
 import { upsertUser, loadUsers, saveUsers } from "./lib/store.js";
 import { isIsraelIP } from "./lib/ip.js";
 import { fetchMonkeytype15s } from "./lib/monkeytype.js";
-import { upsertKey } from "./lib/keystore.js";
+import { upsertKey, getApeKey } from "./lib/keystore.js"; // <-- need getApeKey
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-// right after you create "app"
-app.set('trust proxy', true);
+
+// trust proxy BEFORE any middleware so req.ip / XFF are correct
+app.set("trust proxy", true);
 
 app.use(
   session({
@@ -37,6 +35,15 @@ async function testApeKey(apeKey) {
     headers: { Authorization: `ApeKey ${apeKey}` },
   });
   return r.ok;
+}
+
+// username taken? (case-insensitive). check both stored users and keystore
+async function usernameTaken(siteUsername) {
+  const want = siteUsername.trim().toLowerCase();
+  const users = await loadUsers();
+  if (users.some(u => (u.username || "").trim().toLowerCase() === want)) return true;
+  const key = await getApeKey(siteUsername);
+  return !!key;
 }
 
 // refresh one (siteUsername is the display name you store)
@@ -100,6 +107,11 @@ app.post("/join", async (req, res) => {
       return res.status(400).send("Both Username and Ape Key are required.");
     }
 
+    // NEW: reject taken usernames (case-insensitive)
+    if (await usernameTaken(siteUsername)) {
+      return res.status(409).send("Username is already taken. Please choose another.");
+    }
+
     const ok = await testApeKey(apeKey);
     if (!ok) return res.status(400).send("Ape Key invalid or not authorized.");
 
@@ -108,6 +120,9 @@ app.post("/join", async (req, res) => {
 
     // fetch their 15s PB and upsert using the *site username* as display
     await refreshOne(siteUsername, apeKey);
+
+    // NEW: mark session so UI can show 'Logged in'
+    req.session.user = { username: siteUsername };
 
     return res.redirect("/");
   } catch (e) {
@@ -129,17 +144,35 @@ app.post("/api/join", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Username and Ape Key required." });
     }
 
+    // NEW: reject taken usernames
+    if (await usernameTaken(siteUsername)) {
+      return res.status(409).json({ ok: false, error: "Username is already taken." });
+    }
+
     const ok = await testApeKey(apeKey);
     if (!ok) return res.status(400).json({ ok: false, error: "Ape Key invalid or not authorized." });
 
     await upsertKey({ username: siteUsername, apeKey });
     await refreshOne(siteUsername, apeKey);
 
+    // NEW: set session
+    req.session.user = { username: siteUsername };
+
     return res.json({ ok: true, username: siteUsername });
   } catch (e) {
     console.error("api/join error:", e?.message || e);
     return res.status(500).json({ ok: false, error: "Server error" });
   }
+});
+
+// Session/status helpers for the front-end
+app.get("/api/session", (req, res) => {
+  const u = req.session?.user;
+  res.json({ loggedIn: !!u, username: u?.username || null });
+});
+
+app.post("/logout", (req, res) => {
+  req.session.destroy(() => res.redirect("/"));
 });
 
 // Leaderboard JSON (kept same sorting)
