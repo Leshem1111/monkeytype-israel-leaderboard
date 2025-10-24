@@ -236,16 +236,41 @@ function requireSameOrigin(req, res, next) {
 // ───────────────────────────────────────────────────────────────────────────────
 const sha256 = (s) => crypto.createHash("sha256").update(String(s)).digest("hex");
 
+// Put near your helpers in server.js
 async function testApeKey(apeKey) {
+  const headers = {
+    Authorization: `ApeKey ${apeKey}`,
+    Accept: "application/json",
+    "User-Agent": "mt-il/1.0",
+  };
+
+  // Prefer an endpoint that does NOT require having a recent run
+  // /users/personalBests is good for pure auth verification
   try {
-    const r = await fetchWithTimeout(`${MT_BASE}/results/last`, {
-      headers: { Authorization: `ApeKey ${apeKey}` },
-    }, 6000);
-    return r.ok;
-  } catch {
-    return false;
+    const r = await fetchWithTimeout(`${MT_BASE}/users/personalBests?limit=1`, { headers }, 6000);
+
+    // Explicit “bad key” statuses → definitely invalid
+    if (r.status === 401 || r.status === 470 || r.status === 471 || r.status === 472) {
+      return { ok: false, reason: "unauthorized", status: r.status };
+    }
+
+    // 200/204/404 (some variants) still prove the key is *accepted*;
+    // empty data is fine — the user might not have PBs for that filter.
+    if (r.ok) return { ok: true, status: r.status };
+
+    // Rate-limit / transient errors: treat as “unknown” and let join proceed
+    if (r.status === 429 || (r.status >= 500 && r.status <= 599)) {
+      return { ok: null, reason: "temporary", status: r.status };
+    }
+
+    // Other weird statuses: still don’t block decisively
+    return { ok: null, reason: "unexpected", status: r.status };
+  } catch (e) {
+    // Timeout / network error → “unknown”
+    return { ok: null, reason: "network", error: e?.message };
   }
 }
+
 
 async function usernameExists(siteUsername) {
   const want = siteUsername.trim().toLowerCase();
