@@ -13,6 +13,8 @@ import { upsertKey } from "./lib/keystore.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+// right after you create "app"
+app.set('trust proxy', true);
 
 app.use(
   session({
