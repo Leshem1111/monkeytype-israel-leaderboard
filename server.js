@@ -4,7 +4,7 @@ import express from "express";
 import session from "express-session";
 
 import { randomUUID } from "crypto";
-import fetch from "node-fetch"; // if Node >= 18 you can delete this line and use the global fetch
+//import fetch from "node-fetch"; // if Node >= 18 you can delete this line and use the global fetch
 
 import { upsertUser, loadUsers, saveUsers } from "./lib/store.js";
 import { isIsraelIP } from "./lib/ip.js";
