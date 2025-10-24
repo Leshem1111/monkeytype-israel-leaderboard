@@ -260,20 +260,53 @@ const REFRESH_MINUTES = 3;
 setInterval(async () => {
   try {
     const users = await loadUsers();
+    const toKeep = [];
     for (const u of users) {
-      const mt = await fetchMonkeytype15s(u.username);
-      u.wpm15 = mt.wpm15;
-      u.accuracy = mt.accuracy;
-      u.timestamp = new Date().toISOString();
-      u.country = "IL";
+      try {
+        const apeKey = await getApeKey(u.username);
+        if (!apeKey) continue;
+
+        // Check if key still valid
+        const ok = await testApeKey(apeKey);
+        if (!ok) {
+          console.warn(`[CLEANUP] Ape Key for ${u.username} is invalid — removing user`);
+          continue; // skip (this will effectively delete them below)
+        }
+
+        // Still valid: refresh their score
+        const mt = await fetchMonkeytype15s(u.username);
+        u.wpm15 = mt.wpm15;
+        u.accuracy = mt.accuracy;
+        u.timestamp = new Date().toISOString();
+        u.country = "IL";
+        toKeep.push(u);
+      } catch (inner) {
+        console.warn(`[REFRESH ERROR] ${u.username}:`, inner.message);
+      }
     }
-    await saveUsers(users);
+
+    await saveUsers(toKeep);
+
+    // Also remove orphaned keys (that don't belong to any user anymore)
+    const allUsernames = new Set(toKeep.map((u) => u.username));
+    const store = await import("./lib/keystore.js");
+    const fs = (await import("fs/promises")).default;
+    const dataPath = process.env.DATA_DIR || "data";
+    const file = `${dataPath}/keystore.json`;
+
+    try {
+      const raw = JSON.parse(await fs.readFile(file, "utf8"));
+      for (const [name] of Object.entries(raw.byUser || {})) {
+        if (!allUsernames.has(name)) {
+          delete raw.byUser[name];
+        }
+      }
+      await fs.writeFile(file, JSON.stringify(raw, null, 2));
+    } catch (e) {
+      console.warn("Cleanup keystore failed:", e.message);
+    }
+
   } catch (e) {
     console.error("Auto-refresh failed:", e?.message || e);
   }
 }, REFRESH_MINUTES * 60 * 1000);
-
-// -------------------- start server --------------------
-app.listen(PORT, () => {
-  console.log(`Monkeytype Israel Leaderboard running on http://localhost:${PORT}`);
-});
