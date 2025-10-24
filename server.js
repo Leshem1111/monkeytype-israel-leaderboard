@@ -2,11 +2,17 @@
 import "dotenv/config";
 import express from "express";
 import session from "express-session";
+import crypto from "crypto";
 
 import { upsertUser, loadUsers, saveUsers } from "./lib/store.js";
 import { isIsraelIP } from "./lib/ip.js";
 import { fetchMonkeytype15s } from "./lib/monkeytype.js";
-import { upsertKey, getApeKey } from "./lib/keystore.js"; // <-- need getApeKey
+import {
+  upsertKey,
+  getApeKey,
+  findUsernameByKeyHash,   // NEW
+  setUsernameForKeyHash,   // NEW (for first bind)
+} from "./lib/keystore.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -37,13 +43,13 @@ async function testApeKey(apeKey) {
   return r.ok;
 }
 
-// username taken? (case-insensitive). check both stored users and keystore
-async function usernameTaken(siteUsername) {
+const sha256 = (s) => crypto.createHash("sha256").update(String(s)).digest("hex");
+
+// username exists? (case-insensitive)
+async function usernameExists(siteUsername) {
   const want = siteUsername.trim().toLowerCase();
   const users = await loadUsers();
-  if (users.some(u => (u.username || "").trim().toLowerCase() === want)) return true;
-  const key = await getApeKey(siteUsername);
-  return !!key;
+  return users.some(u => (u.username || "").trim().toLowerCase() === want);
 }
 
 // refresh one (siteUsername is the display name you store)
@@ -57,6 +63,20 @@ async function refreshOne(siteUsername, apeKey = null) {
     timestamp: now,
     country: "IL",
   });
+}
+
+// very simple in-memory rate limiter (per IP) for join
+const lastJoinByIp = new Map();
+function rateLimitJoin(req, res, next) {
+  const ip = req.ip || "unknown";
+  const now = Date.now();
+  const last = lastJoinByIp.get(ip) || 0;
+  const MIN_MS = 10 * 1000; // 10s between join attempts
+  if (now - last < MIN_MS) {
+    return res.status(429).send("Too many attempts. Please wait a few seconds and try again.");
+  }
+  lastJoinByIp.set(ip, now);
+  next();
 }
 
 // -------------------- Routes --------------------
@@ -95,7 +115,7 @@ app.get("/join", async (req, res) => {
 });
 
 // Handle the join form submit
-app.post("/join", async (req, res) => {
+app.post("/join", rateLimitJoin, async (req, res) => {
   const allowed = await isIsraelIP(req);
   if (!allowed) return res.status(403).send("Israel-only access.");
 
@@ -107,21 +127,40 @@ app.post("/join", async (req, res) => {
       return res.status(400).send("Both Username and Ape Key are required.");
     }
 
-    // NEW: reject taken usernames (case-insensitive)
-    if (await usernameTaken(siteUsername)) {
-      return res.status(409).send("Username is already taken. Please choose another.");
-    }
-
     const ok = await testApeKey(apeKey);
     if (!ok) return res.status(400).send("Ape Key invalid or not authorized.");
 
-    // store the key under the *site username*
+    const keyHash = sha256(apeKey);
+
+    // (A) If this Ape Key is already bound to some username, LOG THE USER INTO THAT ENTRY.
+    const boundUser = await findUsernameByKeyHash(keyHash);
+    if (boundUser) {
+      // if they typed a different display name, we ignore it and log them into the bound one
+      await refreshOne(boundUser, apeKey);          // immediate refresh using their key
+      req.session.user = { username: boundUser };   // mark session
+      return res.redirect("/");
+    }
+
+    // (B) No binding yet. If username exists, allow only if the stored key matches -> re-login.
+    if (await usernameExists(siteUsername)) {
+      const storedKey = await getApeKey(siteUsername);
+      if (!storedKey) {
+        return res.status(409).send("Username is already taken.");
+      }
+      if (sha256(storedKey) !== keyHash) {
+        return res.status(409).send("Username is already taken.");
+      }
+      // Correct key for this username -> treat as login
+      await refreshOne(siteUsername, apeKey);
+      req.session.user = { username: siteUsername };
+      return res.redirect("/");
+    }
+
+    // (C) Brand new username + new key: create binding, then proceed.
     await upsertKey({ username: siteUsername, apeKey });
+    await setUsernameForKeyHash(keyHash, siteUsername); // bind keyHash -> username
 
-    // fetch their 15s PB and upsert using the *site username* as display
     await refreshOne(siteUsername, apeKey);
-
-    // NEW: mark session so UI can show 'Logged in'
     req.session.user = { username: siteUsername };
 
     return res.redirect("/");
@@ -132,7 +171,7 @@ app.post("/join", async (req, res) => {
 });
 
 // Optional JSON API (if you want to POST from client instead of using the HTML form)
-app.post("/api/join", async (req, res) => {
+app.post("/api/join", rateLimitJoin, async (req, res) => {
   const allowed = await isIsraelIP(req);
   if (!allowed) return res.status(403).json({ ok: false, error: "Israel-only access." });
 
@@ -144,21 +183,37 @@ app.post("/api/join", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Username and Ape Key required." });
     }
 
-    // NEW: reject taken usernames
-    if (await usernameTaken(siteUsername)) {
-      return res.status(409).json({ ok: false, error: "Username is already taken." });
-    }
-
     const ok = await testApeKey(apeKey);
     if (!ok) return res.status(400).json({ ok: false, error: "Ape Key invalid or not authorized." });
 
-    await upsertKey({ username: siteUsername, apeKey });
-    await refreshOne(siteUsername, apeKey);
+    const keyHash = sha256(apeKey);
 
-    // NEW: set session
+    // (A) If this key is already bound, login to that username
+    const boundUser = await findUsernameByKeyHash(keyHash);
+    if (boundUser) {
+      await refreshOne(boundUser, apeKey);
+      req.session.user = { username: boundUser };
+      return res.json({ ok: true, username: boundUser, relogin: true });
+    }
+
+    // (B) Username exists: allow only if same key -> relogin
+    if (await usernameExists(siteUsername)) {
+      const storedKey = await getApeKey(siteUsername);
+      if (!storedKey || sha256(storedKey) !== keyHash) {
+        return res.status(409).json({ ok: false, error: "Username is already taken." });
+      }
+      await refreshOne(siteUsername, apeKey);
+      req.session.user = { username: siteUsername };
+      return res.json({ ok: true, username: siteUsername, relogin: true });
+    }
+
+    // (C) New username + new key: bind and create
+    await upsertKey({ username: siteUsername, apeKey });
+    await setUsernameForKeyHash(keyHash, siteUsername);
+    await refreshOne(siteUsername, apeKey);
     req.session.user = { username: siteUsername };
 
-    return res.json({ ok: true, username: siteUsername });
+    return res.json({ ok: true, username: siteUsername, created: true });
   } catch (e) {
     console.error("api/join error:", e?.message || e);
     return res.status(500).json({ ok: false, error: "Server error" });
@@ -206,7 +261,6 @@ setInterval(async () => {
   try {
     const users = await loadUsers();
     for (const u of users) {
-      // fetcher will use the stored Ape Key via keystore
       const mt = await fetchMonkeytype15s(u.username);
       u.wpm15 = mt.wpm15;
       u.accuracy = mt.accuracy;
